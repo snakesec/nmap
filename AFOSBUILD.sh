@@ -1,7 +1,7 @@
 apt update
 apt install python3-build
 
-./configure --with-libpcre=included --with-libssh2=included --with-libdnet=included --with-liblua=included --with-liblinear=included --without-zenmap
+./configure --with-libpcre=included --with-libssh2=included --with-libdnet=included --with-liblua=included --with-liblinear=included --without-zenmap --without-ndiff
 
 if [ $? -eq 0 ]
 then
