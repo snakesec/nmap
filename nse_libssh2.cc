@@ -1,5 +1,5 @@
 /*
-* Binding for the libssh2 library. Note that there is not a one-to-one correspondance
+* Binding for the libssh2 library. Note that there is not a one-to-one correspondence
 * between functions in libssh2 and the binding.
 * Currently, during the ssh2 handshake, a call to nsock.receive may result in an EOF
 * error. This appears to only occur when stressing the ssh server (ie during a brute
@@ -14,6 +14,7 @@ extern "C" {
 
 #include "nse_nsock.h"
 #include "nse_utility.h"
+#include "nbase.h"
 
 #include <fcntl.h>
 #include <assert.h>
@@ -277,6 +278,13 @@ static int filter (lua_State *L) {
     return finish_read(L, 0, 0);
 }
 
+#define DO_OR_YIELD(_Stmt, _Sshu_index, _Func, _Ctx) \
+    while ((_Stmt) == LIBSSH2_ERROR_EAGAIN) { \
+        luaL_getmetafield(L, (_Sshu_index), "filter"); \
+        lua_pushvalue(L, (_Sshu_index)); \
+        lua_callk(L, 1, 0, (_Ctx), (_Func)); \
+    }
+
 static int do_session_handshake (lua_State *L, int status, lua_KContext ctx) {
     int rc;
     struct ssh_userdata *sshu = NULL;
@@ -284,13 +292,8 @@ static int do_session_handshake (lua_State *L, int status, lua_KContext ctx) {
     assert(lua_gettop(L) == 4);
     sshu = (struct ssh_userdata *) nseU_checkudata(L, 3, SSH2_UDATA, "ssh2");
 
-    while ((rc = libssh2_session_handshake(sshu->session, sshu->sp[0])) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 3, "filter");
-        lua_pushvalue(L, 3);
-
-        assert(lua_status(L) == LUA_OK);
-        lua_callk(L, 1, 0, 0, do_session_handshake);
-    }
+    DO_OR_YIELD((rc = libssh2_session_handshake(sshu->session, sshu->sp[0])),
+        3, do_session_handshake, ctx);
 
     if (rc) {
         libssh2_session_free(sshu->session);
@@ -335,7 +338,7 @@ static int l_session_open (lua_State *L) {
     luaL_checkinteger(L, 2);
     lua_settop(L, 2);
 
-    state = (ssh_userdata *)lua_newuserdata(L, sizeof(ssh_userdata)); /* index 3 */
+    state = (ssh_userdata *)lua_newuserdatauv(L, sizeof(ssh_userdata), 1); /* index 3 */
 
     assert(lua_gettop(L) == 3);
     state->session = NULL;
@@ -447,14 +450,9 @@ static int userauth_list (lua_State *L, int status, lua_KContext ctx) {
     state = (struct ssh_userdata *) nseU_checkudata(L, 1, SSH2_UDATA, "ssh2");
     assert(state->session != NULL);
 
-    while ((auth_list = libssh2_userauth_list(state->session, username, lua_rawlen(L, 2))) == NULL
-        && libssh2_session_last_errno(state->session) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-
-        assert(lua_status(L) == LUA_OK);
-        lua_callk(L, 1, 0, 0, userauth_list);
-    }
+    DO_OR_YIELD(((auth_list = libssh2_userauth_list(state->session, username, lua_rawlen(L, 2))) == NULL ?
+          libssh2_session_last_errno(state->session) : LIBSSH2_ERROR_NONE),
+        1, userauth_list, ctx);
 
     if (auth_list) {
         const char *auth = strtok(auth_list, ",");
@@ -506,45 +504,68 @@ static int l_userauth_banner (lua_State *L) {
     return userauth_banner(L, 0, 0);
 }
 
+struct publickey_ctx {
+  struct ssh_userdata *state;
+  const char *username;
+  size_t username_len;
+  const char *privkey;
+  size_t privkey_len;
+  const char *pubkey;
+  size_t pubkey_len;
+  const char *passphrase;
+};
+
+static void validate_publickey_params(lua_State *L, struct publickey_ctx *ctx) {
+  memset(ctx, 0, sizeof(struct publickey_ctx));
+  ctx->state = (struct ssh_userdata *) nseU_checkudata(L, 1, SSH2_UDATA, "ssh2");
+  ctx->username = luaL_checklstring(L, 2, &ctx->username_len);
+  ctx->privkey = luaL_checklstring(L, 3, &ctx->privkey_len);
+
+  ctx->passphrase = lua_isstring(L, 4) ? lua_tostring(L, 4) : NULL;
+  ctx->pubkey = lua_isstring(L, 5) ? lua_tolstring(L, 5, &ctx->pubkey_len) : NULL;
+}
+
 static int userauth_publickey (lua_State *L, int status, lua_KContext ctx) {
+    struct publickey_ctx *context = (struct publickey_ctx *)ctx;
     int rc;
-    const char *username, *private_key_file, *passphrase, *public_key_file;
-    struct ssh_userdata *state = NULL;
-    state = (struct ssh_userdata *) nseU_checkudata(L, 1, SSH2_UDATA, "ssh2");
+    DO_OR_YIELD((rc = libssh2_userauth_publickey_fromfile_ex(
+        context->state->session, context->username, context->username_len,
+        context->pubkey, context->privkey, context->passphrase
+        )),
+        1, userauth_publickey, ctx);
 
-    username = luaL_checkstring(L, 2);
-    private_key_file = luaL_checkstring(L, 3);
-
-    if (lua_isstring(L, 4))
-        passphrase = lua_tostring(L, 4);
-    else
-        passphrase = NULL;
-
-    if (lua_isstring(L, 5))
-        public_key_file = lua_tostring(L, 5);
-    else
-        public_key_file = NULL;
-
-    while ((rc = libssh2_userauth_publickey_fromfile(
-        state->session, username, public_key_file, private_key_file, passphrase
-        )) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-
-        assert(lua_status(L) == LUA_OK);
-        lua_callk(L, 1, 0, 0, userauth_publickey);
-    }
-
-    if (rc == 0)
-        lua_pushboolean(L, 1);
-    else
-        lua_pushboolean(L, 0);
+    lua_pushboolean(L, (rc == 0));
 
     return 1;
 }
 
 static int l_userauth_publickey (lua_State *L) {
-    return userauth_publickey(L, 0, 0);
+  publickey_ctx *params = NULL;
+  params = (publickey_ctx *)lua_newuserdatauv(L, sizeof(publickey_ctx), 0);
+  validate_publickey_params(L, params);
+  return userauth_publickey(L, 0, (lua_KContext) params);
+}
+
+static int userauth_publickey_frommemory (lua_State *L, int status, lua_KContext ctx) {
+    struct publickey_ctx *context = (struct publickey_ctx *)ctx;
+    int rc;
+    DO_OR_YIELD((rc = libssh2_userauth_publickey_frommemory(
+        context->state->session, context->username, context->username_len,
+        context->pubkey, context->pubkey_len, context->privkey,
+        context->privkey_len, context->passphrase
+        )),
+        1, userauth_publickey_frommemory, ctx);
+
+    lua_pushboolean(L, (rc == 0));
+
+    return 1;
+}
+
+static int l_userauth_publickey_frommemory (lua_State *L) {
+  publickey_ctx *params = NULL;
+  params = (publickey_ctx *)lua_newuserdatauv(L, sizeof(publickey_ctx), 0);
+  validate_publickey_params(L, params);
+  return userauth_publickey_frommemory(L, 0, (lua_KContext) params);
 }
 
 static int l_read_publickey (lua_State *L) {
@@ -552,6 +573,11 @@ static int l_read_publickey (lua_State *L) {
     char c;
     const char* publickeyfile = luaL_checkstring(L, 1);
     luaL_Buffer publickey_data;
+
+    lua_getglobal(L, "require");
+    lua_pushliteral(L, "base64");
+    lua_call(L, 1, 1);
+    lua_getfield(L, -1, "dec");
 
     fd = fopen(publickeyfile, "r");
     if (!fd)
@@ -566,11 +592,6 @@ static int l_read_publickey (lua_State *L) {
     }
     fclose(fd);
 
-    lua_getglobal(L, "require");
-    lua_pushstring(L, "base64");
-    lua_call(L, 1, 1);
-    lua_getfield(L, -1, "dec");
-
     luaL_pushresult(&publickey_data);
     lua_call(L, 1, 1);
 
@@ -579,12 +600,12 @@ static int l_read_publickey (lua_State *L) {
 
 static int publickey_canauth_cb (LIBSSH2_SESSION *session, unsigned char **sig,
     size_t *sig_len, const unsigned char *data, size_t data_len, void **abstract) {
-    return 0;
+    // Must return an error, any error, other than LIBSSH2_ERROR_EAGAIN
+    return LIBSSH2_ERROR_PUBLICKEY_PROTOCOL;
 }
 
 static int publickey_canauth (lua_State *L, int status, lua_KContext ctx) {
     int rc;
-    int errlen;
     char *errmsg;
     const char *username;
     unsigned const char *publickey_data;
@@ -599,23 +620,22 @@ static int publickey_canauth (lua_State *L, int status, lua_KContext ctx) {
     else
         return luaL_error(L, "Invalid public key");
 
-    while ((rc = libssh2_userauth_publickey(state->session,
-        username, publickey_data, len, &publickey_canauth_cb, NULL)) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
+    DO_OR_YIELD((rc = libssh2_userauth_publickey(state->session,
+        username, publickey_data, len, &publickey_canauth_cb, NULL)),
+        1, publickey_canauth, ctx);
 
-        assert(lua_status(L) == LUA_OK);
-        lua_callk(L, 1, 0, 0, publickey_canauth);
-    }
+    libssh2_session_last_error(state->session, &errmsg, NULL, 0);
 
-    libssh2_session_last_error(state->session, &errmsg, &errlen, 0);
-
-    if (rc == LIBSSH2_ERROR_ALLOC || rc == LIBSSH2_ERROR_PUBLICKEY_UNVERIFIED)
-        lua_pushboolean(L, 1); //Username/PublicKey combination invalid
+    if (rc == LIBSSH2_ERROR_PUBLICKEY_UNVERIFIED && !strncmp("Callback", errmsg, 8))
+        // The username/publickey combination has been accepted because
+        // the authentication flow progressed all the way to our dummy
+        // callback where the private key is needed
+        lua_pushboolean(L, 1);
     else if (rc == LIBSSH2_ERROR_AUTHENTICATION_FAILED)
+        // The server rejected the username/publickey combination
         lua_pushboolean(L, 0);
     else
-        return luaL_error(L, "Invalid Publickey");
+        return luaL_error(L, "Invalid public key: %s", errmsg);
 
     return 1;
 }
@@ -640,14 +660,8 @@ static int userauth_password (lua_State *L, int status, lua_KContext ctx) {
     password = luaL_checkstring(L, 3);
 
     assert(state->session != NULL);
-    while ((rc = libssh2_userauth_password(state->session,
-        username, password)) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-
-        assert(lua_status(L) == LUA_OK);
-        lua_callk(L, 1, 0, 0, userauth_password);
-    }
+    DO_OR_YIELD((rc = libssh2_userauth_password(state->session, username, password)),
+        1, userauth_password, ctx);
 
     if (rc == 0)
         lua_pushboolean(L, 1);
@@ -668,14 +682,8 @@ static int session_close (lua_State *L, int status, lua_KContext ctx) {
     state = (struct ssh_userdata *) nseU_checkudata(L, 1, SSH2_UDATA, "ssh2");
 
     if (state->session != NULL) {
-        while ((rc = libssh2_session_disconnect(
-            state->session, "Normal Shutdown")) == LIBSSH2_ERROR_EAGAIN) {
-            luaL_getmetafield(L, 1, "filter");
-            lua_pushvalue(L, 1);
-
-            assert(lua_status(L) == LUA_OK);
-            lua_callk(L, 1, 0, 0, session_close);
-        }
+        DO_OR_YIELD((rc = libssh2_session_disconnect(state->session, "Normal Shutdown")),
+            1, session_close, ctx);
 
         if (rc < 0)
             return luaL_error(L, "unable to disconnect session");
@@ -697,13 +705,11 @@ static int channel_read (lua_State *L, int status, lua_KContext ctx) {
     int rc;
     char buf[2048];
     size_t buflen = 2048;
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **) lua_touserdata(L, 2);
+    LIBSSH2_CHANNEL *channel = (LIBSSH2_CHANNEL *) lua_touserdata(L, 2);
+    int stream_id = luaL_checkinteger(L, 3);
 
-    while ((rc = libssh2_channel_read(*channel, buf, buflen)) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-        lua_callk(L, 1, 0, 0, channel_read);
-    }
+    DO_OR_YIELD((rc = libssh2_channel_read_ex(channel, stream_id, buf, buflen)),
+        1, channel_read, ctx);
 
     if (rc > 0) {
         lua_pushlstring(L, buf, rc);
@@ -718,48 +724,28 @@ static int channel_read (lua_State *L, int status, lua_KContext ctx) {
 }
 
 static int l_channel_read (lua_State *L) {
+    lua_pushinteger(L, 0);
     return channel_read(L, 0, 0);
 }
 
 static int l_channel_read_stderr(lua_State *L) {
-    int rc;
-    char buf[2048];
-    size_t buflen = 2048;
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **) lua_touserdata(L, 2);
-
-    while ((rc = libssh2_channel_read_stderr(*channel, buf, buflen)) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-        lua_callk(L, 1, 0, 0, channel_read);
-    }
-
-    if (rc > 0) {
-        lua_pushlstring(L, buf, rc);
-        return 1;
-    }
-    else if (rc < 0)
-        return luaL_error(L, "Reading from channel");
-
-    lua_pushnil(L);
-    return 1;
+    lua_pushinteger(L, SSH_EXTENDED_DATA_STDERR);
+    return channel_read(L, 0, 0);
 }
 
 static int channel_write (lua_State *L, int status, lua_KContext ctx) {
     int rc;
     const char *buf;
     size_t buflen = 0;
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **) lua_touserdata(L, 2);
+    LIBSSH2_CHANNEL *channel = (LIBSSH2_CHANNEL *) lua_touserdata(L, 2);
 
     if (lua_isstring(L, 3))
         buf = lua_tolstring(L, 3, &buflen);
     else
         return luaL_error(L, "Invalid buffer");
 
-    while ((rc = libssh2_channel_write(*channel, buf, buflen)) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-        lua_callk(L, 1, 0, 0, channel_write);
-    }
+    DO_OR_YIELD((rc = libssh2_channel_write(channel, buf, buflen)),
+        1, channel_write, ctx);
 
     if (rc < 0)
         return luaL_error(L, "Writing to channel");
@@ -775,14 +761,11 @@ static int l_channel_write (lua_State *L) {
 static int channel_exec (lua_State *L, int status, lua_KContext ctx) {
     int rc;
     // ssh_userdata *state = (ssh_userdata *)lua_touserdata(L, 1);
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **) lua_touserdata(L, 2);
+    LIBSSH2_CHANNEL *channel = (LIBSSH2_CHANNEL *) lua_touserdata(L, 2);
     const char *cmd = luaL_checkstring(L, 3);
 
-    while ((rc = libssh2_channel_exec(*channel, cmd)) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-        lua_callk(L, 1, 0, 0, channel_exec);
-    }
+    DO_OR_YIELD((rc = libssh2_channel_exec(channel, cmd)),
+        1, channel_exec, ctx);
     if (rc != 0)
         return luaL_error(L, "Error executing command");
 
@@ -795,9 +778,9 @@ static int l_channel_exec (lua_State *L) {
 
 static int l_channel_eof(lua_State *L) {
     int result;
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **) lua_touserdata(L, 1);
+    LIBSSH2_CHANNEL *channel = (LIBSSH2_CHANNEL *) lua_touserdata(L, 1);
 
-    result = libssh2_channel_eof(*channel);
+    result = libssh2_channel_eof(channel);
     if (result >= 0)
         lua_pushboolean(L, result);
     else
@@ -809,13 +792,10 @@ static int l_channel_eof(lua_State *L) {
 static int channel_send_eof(lua_State *L, int status, lua_KContext ctx) {
     int rc;
     // ssh_userdata *state = (ssh_userdata *)lua_touserdata(L, 1);
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **) lua_touserdata(L, 2);
+    LIBSSH2_CHANNEL *channel = (LIBSSH2_CHANNEL *) lua_touserdata(L, 2);
 
-    while ((rc = libssh2_channel_send_eof(*channel)) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-        lua_callk(L, 1, 0, 0, channel_send_eof);
-    }
+    DO_OR_YIELD((rc = libssh2_channel_send_eof(channel)),
+        1, channel_send_eof, ctx);
     if (rc != 0)
         return luaL_error(L, "Error sending EOF");
 
@@ -826,66 +806,63 @@ static int l_channel_send_eof(lua_State *L) {
     return channel_send_eof(L, 0, 0);
 }
 
+struct channel_context {
+  bool request_pty;
+  LIBSSH2_CHANNEL *channel;
+};
+
 static int setup_channel(lua_State *L, int status, lua_KContext ctx) {
     int rc;
-    // ssh_userdata *state = (ssh_userdata *)lua_touserdata(L, 1);
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **) lua_touserdata(L, 2);
+    channel_context *channel_ctx = (channel_context *) ctx;
+    ssh_userdata *state = (ssh_userdata *)lua_touserdata(L, 1);
 
-    while ((rc = libssh2_channel_request_pty(*channel, "vanilla")) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-        lua_callk(L, 1, 0, 0, setup_channel);
+    if (channel_ctx->channel == NULL) {
+      DO_OR_YIELD(((channel_ctx->channel = libssh2_channel_open_session(state->session)) == NULL ?
+            libssh2_session_last_errno(state->session) : LIBSSH2_ERROR_NONE),
+          1, setup_channel, ctx);
+      if (channel_ctx->channel == NULL) {
+        free(channel_ctx);
+        return luaL_error(L, "Opening channel");
+      }
     }
-    if (rc != 0)
+
+    if (channel_ctx->request_pty) {
+      DO_OR_YIELD((rc = libssh2_channel_request_pty(channel_ctx->channel, "vanilla")),
+          1, setup_channel, ctx);
+      if (rc != 0) {
+        free(channel_ctx);
         return luaL_error(L, "Requesting pty");
+      }
+      channel_ctx->request_pty = false; // make sure we don't enter this block again
+    }
+
+    lua_pushlightuserdata(L, channel_ctx->channel);
+    free(channel_ctx);
 
     return 1;
 }
 
-static int l_setup_channel (lua_State *L) {
-    return setup_channel(L, 0, 0);
-}
-
-static int finish_open_channel (lua_State *L, int status, lua_KContext ctx) {
-    ssh_userdata *state = (ssh_userdata *)lua_touserdata(L, 1);
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **) lua_touserdata(L, 2);
-
-    while ((*channel = libssh2_channel_open_session(state->session)) == NULL
-    && libssh2_session_last_errno(state->session) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-        lua_callk(L, 1, 0, 0, finish_open_channel);
-    }
-    if (channel == NULL)
-        return luaL_error(L, "Opening channel");
-
-    return setup_channel(L, 0, 0);
-}
-
 static int l_open_channel (lua_State *L) {
-    ssh_userdata *state = (ssh_userdata *)lua_touserdata(L, 1);
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **)lua_newuserdata(L, sizeof(LIBSSH2_CHANNEL *));
-
-    while ((*channel = libssh2_channel_open_session(state->session)) == NULL
-    && libssh2_session_last_errno(state->session) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-        lua_callk(L, 1, 0, 0, finish_open_channel);
+    //ssh_userdata *state = (ssh_userdata *)lua_touserdata(L, 1);
+    bool no_pty = false;
+    if (lua_gettop(L) > 1) {
+      no_pty = lua_toboolean(L, 2);
     }
+    lua_settop(L, 1);
 
-    return l_setup_channel(L);
+    channel_context *ctx =  (channel_context *)safe_zalloc(sizeof(channel_context));
+    ctx->request_pty = !no_pty;
+
+    return setup_channel(L, 0, (lua_KContext) ctx);
 }
 
 static int channel_close (lua_State *L, int status, lua_KContext ctx) {
     int rc;
     // ssh_userdata *state = (ssh_userdata *)lua_touserdata(L, 1);
-    LIBSSH2_CHANNEL **channel = (LIBSSH2_CHANNEL **) lua_touserdata(L, 2);
+    LIBSSH2_CHANNEL *channel = (LIBSSH2_CHANNEL *) lua_touserdata(L, 2);
 
-    while ((rc = libssh2_channel_close(*channel)) == LIBSSH2_ERROR_EAGAIN) {
-        luaL_getmetafield(L, 1, "filter");
-        lua_pushvalue(L, 1);
-        lua_callk(L, 1, 0, 0, channel_close);
-    }
+    DO_OR_YIELD((rc = libssh2_channel_close(channel)),
+        1, channel_close, ctx);
     if (rc != 0)
         return luaL_error(L, "Error closing channel");;
 
@@ -903,6 +880,7 @@ static const struct luaL_Reg libssh2[] = {
     { "userauth_banner", l_userauth_banner },
     { "userauth_list", l_userauth_list },
     { "userauth_publickey", l_userauth_publickey },
+    { "userauth_publickey_frommemory", l_userauth_publickey_frommemory },
     { "read_publickey", l_read_publickey },
     { "publickey_canauth", l_publickey_canauth },
     { "userauth_password", l_userauth_password },

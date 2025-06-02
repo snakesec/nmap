@@ -5,7 +5,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -59,7 +59,7 @@
  *
  ***************************************************************************/
 
-/* $Id: NmapOps.cc 38790 2024-02-28 18:46:45Z dmiller $ */
+/* $Id: NmapOps.cc 39083 2025-02-26 17:44:43Z dmiller $ */
 #ifdef WIN32
 #include "winfix.h"
 #endif
@@ -374,6 +374,10 @@ Npcap is available from https://npcap.com. The Npcap driver service must\n\
 be started by an administrator before Npcap can be used. Running nmap.exe\n\
 will open a UAC dialog where you can start the service if you have\n\
 administrator privileges.";
+
+#define YOU_ARE_ROOT "Npcap is installed"
+#else
+#define YOU_ARE_ROOT "you are root"
 #endif
 
 
@@ -403,15 +407,15 @@ administrator privileges.";
   }
 
  if ((pingtype & PINGTYPE_UDP) && (!isr00t)) {
-   fatal("Sorry, UDP Ping (-PU) only works if you are root (because we need to read raw responses off the wire)");
+   fatal("Sorry, UDP Ping (-PU) only works if " YOU_ARE_ROOT " (because we need to read raw responses off the wire)");
  }
 
  if ((pingtype & PINGTYPE_SCTP_INIT) && (!isr00t)) {
-   fatal("Sorry, SCTP INIT Ping (-PY) only works if you are root (because we need to read raw responses off the wire)");
+   fatal("Sorry, SCTP INIT Ping (-PY) only works if " YOU_ARE_ROOT " (because we need to read raw responses off the wire)");
   }
 
  if ((pingtype & PINGTYPE_PROTO) && (!isr00t)) {
-   fatal("Sorry, IPProto Ping (-PO) only works if you are root (because we need to read raw responses off the wire)");
+   fatal("Sorry, IPProto Ping (-PO) only works if " YOU_ARE_ROOT " (because we need to read raw responses off the wire)");
  }
 
  if (ipprotscan && (TCPScan() || UDPScan() || SCTPScan())) {

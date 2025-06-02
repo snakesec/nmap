@@ -7,7 +7,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -165,7 +165,8 @@ int resolve_numeric(const char *ip, unsigned short port,
  * <http://www.cymru.com/Documents/bogon-bn-nonagg.txt> for bogon
  * netblocks.
  */
-int ip_is_reserved(struct in_addr *ip);
+int ip_is_reserved(const struct sockaddr_storage *addr);
+
 
 
 /* A couple of trivial functions that maintain a cache of IP to MAC
@@ -236,7 +237,7 @@ typedef enum { devt_ethernet, devt_loopback, devt_p2p, devt_other  } devtype;
 struct link_header {
   int datalinktype; /* pcap_datalink(), such as DLT_EN10MB */
   int headerlen; /* 0 if header was too big or unavailaable */
-  u8 header[MAX_LINK_HEADERSZ];
+  const u8 *header;
 };
 
 /* Relevant (to Nmap) information about an interface */
@@ -318,7 +319,7 @@ int ipaddr2devname( char *dev, const struct sockaddr_storage *addr );
 
 /* Convert a network interface name (IE ppp0 eth0) to an IP address.
  * Returns 0 on success or -1 in case of error. */
-int devname2ipaddr(char *dev, struct sockaddr_storage *addr);
+int devname2ipaddr(char *dev, int af, struct sockaddr_storage *addr);
 
 int sockaddr_equal(const struct sockaddr_storage *a,
   const struct sockaddr_storage *b);
@@ -370,12 +371,6 @@ struct sys_route *getsysroutes(int *howmany, char *errstr, size_t errstrlen);
  * matches one of the local network interfaces' address, etc).
  * Returns 1 if the address is thought to be localhost and 0 otherwise */
 int islocalhost(const struct sockaddr_storage *ss);
-
-/* Determines whether the supplied address corresponds to a private,
- * non-Internet-routable address. See RFC1918 for details.
- * Also checks for link-local addresses per RFC3927.
- * Returns 1 if the address is private or 0 otherwise. */
-int isipprivate(const struct sockaddr_storage *addr);
 
 /* Takes binary data found in the IP Options field of an IPv4 packet
  * and returns a string containing an ASCII description of the options
@@ -533,9 +528,8 @@ int read_reply_pcap(pcap_t *pd, long to_usec,
 size_t read_host_from_file(FILE *fp, char *buf, size_t n);
 
 /* Return next target host specification from the supplied stream.
- * if parameter "random" is set to true, then the function will
- * return a random, non-reserved, IP address in decimal-dot notation */
-const char *grab_next_host_spec(FILE *inputfd, bool random, int argc, const char **fakeargv);
+ */
+const char *grab_next_host_spec(FILE *inputfd, int argc, const char **fakeargv);
 
 #ifdef WIN32
 /* Convert a dnet interface name into the long pcap style.  This also caches the

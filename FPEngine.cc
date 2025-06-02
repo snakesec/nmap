@@ -6,7 +6,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -76,8 +76,6 @@ extern NmapOps o;
 #ifdef WIN32
 /* Need DnetName2PcapName */
 #include "libnetutil/netutil.h"
-/* from libdnet's intf-win32.c */
-extern "C" int g_has_npcap_loopback;
 #endif
 
 #include <math.h>
@@ -159,7 +157,7 @@ void FPNetworkControl::init(const char *ifname, devtype iftype) {
   /* Obtain raw socket or check that we can obtain an eth descriptor. */
   if ((o.sendpref & PACKET_SEND_ETH) && (iftype == devt_ethernet
 #ifdef WIN32
-        || (g_has_npcap_loopback && iftype == devt_loopback)
+        || (o.have_pcap && iftype == devt_loopback)
 #endif
         ) && ifname != NULL) {
     /* We don't need to store the eth handler because FPProbes come with a
@@ -1810,7 +1808,7 @@ int FPHost6::build_probe_list() {
   /* ICMP Probe #3: Neighbor Solicitation. (only sent to on-link targets) */
   if (this->target_host->directlyConnected()
 #ifdef WIN32
-    && !(g_has_npcap_loopback && this->target_host->ifType() == devt_loopback)
+    && this->target_host->ifType() != devt_loopback
 #endif
     ) {
     ip6 = new IPv6Header();
@@ -2041,7 +2039,8 @@ int FPHost6::schedule() {
       }
 
       /* Check if the probe timedout */
-      if (TIMEVAL_SUBTRACT(now, this->fp_probes[i].getTimeSent()) >= this->rto) {
+      struct timeval sent = this->fp_probes[i].getTimeSent();
+      if (TIMEVAL_SUBTRACT(now, sent) >= this->rto) {
 
         /* If we have reached the maximum number of retransmissions, mark the
          * probe as failed. Otherwise, schedule its transmission. */
@@ -2099,10 +2098,11 @@ int FPHost6::schedule() {
         continue;
       }
 
+      struct timeval sent = this->fp_probes[i].getTimeSent();
       /* If there is some timed probe for which we have already scheduled its
        * retransmission but it hasn't been sent yet, break the loop. We don't
        * have to worry about retransmitting these probes yet.*/
-      if (this->fp_probes[i].getTimeSent().tv_sec == 0)
+      if (sent.tv_sec == 0)
         return OP_SUCCESS;
 
       /* If we got a total timeout for any of the timed probes, we shouldn't
@@ -2118,7 +2118,7 @@ int FPHost6::schedule() {
        * time out (max retransmissions done and still no answer) then mark
        * it as such. Otherwise, count it so we can retransmit the whole
        * group of timed probes later if appropriate. */
-      if (TIMEVAL_SUBTRACT(now, this->fp_probes[i].getTimeSent()) >= this->rto) {
+      if (TIMEVAL_SUBTRACT(now, sent) >= this->rto) {
         if (o.debugging > 3) {
           log_write(LOG_PLAIN, "[%s] timed probe %d (%s) timedout\n",
             this->target_host->targetipstr(), i, this->fp_probes[i].getProbeID());
@@ -2318,11 +2318,13 @@ int FPHost6::callback(const u8 *pkt, size_t pkt_len, const struct timeval *tv) {
 
       /* See if the received packet is a response to a probe */
       if (this->fp_probes[i].isResponse(rcvd)) {
-          struct timeval now, time_sent;
+          struct timeval time_sent = this->fp_probes[i].getTimeSent();
+          assert(time_sent.tv_sec > 0);
+          struct timeval now;
 
           gettimeofday(&now, NULL);
           this->fp_responses[i] = new FPResponse(this->fp_probes[i].getProbeID(),
-            pkt, pkt_len, fp_probes[i].getTimeSent(), *tv);
+            pkt, pkt_len, time_sent, *tv);
           this->fp_probes[i].incrementReplies();
           match_found = true;
 
@@ -2341,8 +2343,6 @@ int FPHost6::callback(const u8 *pkt, size_t pkt_len, const struct timeval *tv) {
           }
           this->probes_answered++;
           /* Recompute the Retransmission Timeout based on this new RTT observation. */
-          time_sent = this->fp_probes[i].getTimeSent();
-          assert(time_sent.tv_sec > 0);
           this->update_RTO(TIMEVAL_SUBTRACT(now, time_sent), this->fp_probes[i].getRetransmissions() != 0);
           break;
       }

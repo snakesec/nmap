@@ -9,7 +9,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -63,7 +63,7 @@
  *
  ***************************************************************************/
 
-/* $Id: idle_scan.cc 38790 2024-02-28 18:46:45Z dmiller $ */
+/* $Id: idle_scan.cc 39125 2025-04-16 00:00:05Z dmiller $ */
 
 /* IPv6 fragment ID sequence algorithms. http://seclists.org/nmap-dev/2013/q3/369.
         Android 4.1 (Linux 3.0.15) | Per host, incremental (1)
@@ -107,10 +107,6 @@
 #include <stdio.h>
 
 extern NmapOps o;
-#ifdef WIN32
-/* from libdnet's intf-win32.c */
-extern "C" int g_has_npcap_loopback;
-#endif
 
 struct idle_proxy_info {
   Target host; /* contains name, IP, source IP, timing info, etc. */
@@ -605,7 +601,7 @@ static void initialize_idleproxy(struct idle_proxy_info *proxy, char *proxyName,
   /* First we need a raw socket ... */
   if ((o.sendpref & PACKET_SEND_ETH) && (proxy->host.ifType() == devt_ethernet
 #ifdef WIN32
-    || (g_has_npcap_loopback && proxy->host.ifType() == devt_loopback)
+    || (o.have_pcap && proxy->host.ifType() == devt_loopback)
 #endif
     )) {
     if (!setTargetNextHopMAC(&proxy->host))
@@ -1058,12 +1054,18 @@ static int idlescan_countopen2(struct idle_proxy_info *proxy,
 
   openports = -1;
   tries = 0;
-  TIMEVAL_MSEC_ADD(probe_times[0], start, MAX(50, (target->to.srtt * 3 / 4) / 1000));
-  TIMEVAL_MSEC_ADD(probe_times[1], start, target->to.srtt / 1000 );
-  TIMEVAL_MSEC_ADD(probe_times[2], end, MAX(75, (2 * target->to.srtt +
-                   target->to.rttvar) / 1000));
-  TIMEVAL_MSEC_ADD(probe_times[3], end, MIN(4000, (2 * target->to.srtt +
-                   (target->to.rttvar << 2 )) / 1000));
+
+  int tmp = (target->to.srtt * 3) / (4 * 1000);
+  tmp = MAX(50, tmp);
+  TIMEVAL_MSEC_ADD(probe_times[0], start, tmp);
+  tmp = target->to.srtt / 1000;
+  TIMEVAL_MSEC_ADD(probe_times[1], start, tmp);
+  tmp = (2 * target->to.srtt + target->to.rttvar) / 1000;
+  tmp = MAX(75, tmp);
+  TIMEVAL_MSEC_ADD(probe_times[2], end, tmp);
+  tmp = (2 * target->to.srtt + (target->to.rttvar << 2 )) / 1000;
+  tmp = MIN(4000, tmp);
+  TIMEVAL_MSEC_ADD(probe_times[3], end, tmp);
 
   do {
     if (tries == 2)

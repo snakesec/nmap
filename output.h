@@ -9,7 +9,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -63,7 +63,7 @@
  *
  ***************************************************************************/
 
-/* $Id: output.h 38790 2024-02-28 18:46:45Z dmiller $ */
+/* $Id: output.h 39083 2025-02-26 17:44:43Z dmiller $ */
 
 #ifndef OUTPUT_H
 #define OUTPUT_H
@@ -198,6 +198,11 @@ void write_host_status(const Target *currenths);
 
 /* Writes host status info to the XML stream wrapped in a <hosthint> tag */
 void write_xml_hosthint(const Target *currenths);
+
+/* Add a <target> element to the XML stating that a target specification was
+   ignored. This can be because of, for example, a DNS resolution failure, or a
+   syntax error. */
+void log_bogus_target(const char *expr);
 
 /* Prints the formatted OS Scan output to stdout, logfiles, etc (but only
    if an OS Scan was performed */
