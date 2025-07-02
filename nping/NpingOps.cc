@@ -5,7 +5,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -253,7 +253,7 @@ NpingOps::NpingOps() {
     icmp_trans_time=0;
     icmp_trans_time_set=false;
 
-    memset( icmp_advert_entry_addr, 0, sizeof(u32)*MAX_ICMP_ADVERT_ENTRIES );
+    memset( icmp_advert_entry_addr, 0, sizeof(struct in_addr)*MAX_ICMP_ADVERT_ENTRIES );
     memset( icmp_advert_entry_pref, 0, sizeof(u32)*MAX_ICMP_ADVERT_ENTRIES );
     icmp_advert_entry_count=0;
     icmp_advert_entry_set=false;
@@ -1416,7 +1416,6 @@ struct sockaddr_storage *NpingOps::getSourceSockAddr(struct sockaddr_storage *ss
         s6->sin6_addr=this->getIPv6SourceAddress();
     else
         s6->sin6_addr=in6addr_any;
-    s6->sin6_addr=this->getIPv6SourceAddress();
     s6->sin6_family=AF_INET6;
     if(this->issetSourcePort())
         s6->sin6_port=htons(this->getSourcePort());
@@ -1896,7 +1895,7 @@ bool NpingOps::issetICMPTransmitTimestamp(){
 
 
 int NpingOps::addICMPAdvertEntry(struct in_addr addr, u32 pref ){
-  if( this->icmp_advert_entry_count > MAX_ICMP_ADVERT_ENTRIES )
+  if( this->icmp_advert_entry_count >= MAX_ICMP_ADVERT_ENTRIES )
     return OP_FAILURE;
   this->icmp_advert_entry_addr[this->icmp_advert_entry_count] = addr;
   this->icmp_advert_entry_pref[this->icmp_advert_entry_count] = pref;
@@ -2392,7 +2391,7 @@ if( this->getMode()!=TCP_CONNECT && this->getMode()!=UDP_UNPRIV && this->getRole
                 else
                     this->setDevice( dev );
                 /* Libpcap gave us a device name, try to obtain it's IP */
-                if ( devname2ipaddr_alt(this->getDevice(), &ifaddr) != 0 ){
+                if ( devname2ipaddr(this->getDevice(), this->af(), &ifaddr) != 0 ){
                     if( this->isRoot() )
                         nping_fatal(QT_3,"Cannot figure out what source address to use for device %s, does it even exist?", this->getDevice());
                     else

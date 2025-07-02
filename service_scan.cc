@@ -6,7 +6,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -60,7 +60,7 @@
  *
  ***************************************************************************/
 
-/* $Id: service_scan.cc 38806 2024-03-16 01:16:34Z nnposter $ */
+/* $Id: service_scan.cc 39083 2025-02-26 17:44:43Z dmiller $ */
 
 
 #include "service_scan.h"
@@ -110,6 +110,9 @@
 
 extern NmapOps o;
 
+#define SERVICE_FIELD_LEN 80
+#define SERVICE_EXTRA_LEN 256
+#define SERVICE_TYPE_LEN 32
 // Details on a particular service (open port) we are trying to match
 class ServiceNFO {
 public:
@@ -137,15 +140,15 @@ public:
   const char *probe_matched;
   // If a match is found, any product/version/info/hostname/ostype/devicetype
   // is placed in these 6 strings.  Otherwise the string will be 0 length.
-  char product_matched[80];
-  char version_matched[80];
-  char extrainfo_matched[256];
-  char hostname_matched[80];
-  char ostype_matched[32];
-  char devicetype_matched[32];
-  char cpe_a_matched[80];
-  char cpe_h_matched[80];
-  char cpe_o_matched[80];
+  char product_matched[SERVICE_FIELD_LEN];
+  char version_matched[SERVICE_FIELD_LEN];
+  char extrainfo_matched[SERVICE_EXTRA_LEN];
+  char hostname_matched[SERVICE_FIELD_LEN];
+  char ostype_matched[SERVICE_TYPE_LEN];
+  char devicetype_matched[SERVICE_TYPE_LEN];
+  char cpe_a_matched[SERVICE_FIELD_LEN];
+  char cpe_h_matched[SERVICE_FIELD_LEN];
+  char cpe_o_matched[SERVICE_FIELD_LEN];
   enum service_tunnel_type tunnel; /* SERVICE_TUNNEL_NONE, SERVICE_TUNNEL_SSL */
   // This stores our SSL session id, which will help speed up subsequent
   // SSL connections.  It's overwritten each time.  void* is used so we don't
@@ -516,13 +519,13 @@ void ServiceProbeMatch::InitMatch(const char *matchtext, int lineno) {
   // NULL.
 const struct MatchDetails *ServiceProbeMatch::testMatch(const u8 *buf, int buflen) {
   int rc;
-  static char product[80];
-  static char version[80];
-  static char info[256];  /* We will truncate with ... later */
-  static char hostname[80];
-  static char ostype[32];
-  static char devicetype[32];
-  static char cpe_a[80], cpe_h[80], cpe_o[80];
+  static char product[SERVICE_FIELD_LEN];
+  static char version[SERVICE_FIELD_LEN];
+  static char info[SERVICE_EXTRA_LEN];  /* We will truncate with ... later */
+  static char hostname[SERVICE_FIELD_LEN];
+  static char ostype[SERVICE_TYPE_LEN];
+  static char devicetype[SERVICE_TYPE_LEN];
+  static char cpe_a[SERVICE_FIELD_LEN], cpe_h[SERVICE_FIELD_LEN], cpe_o[SERVICE_FIELD_LEN];
   char *bufc = (char *) buf;
   assert(isInitialized);
 
@@ -532,17 +535,20 @@ const struct MatchDetails *ServiceProbeMatch::testMatch(const u8 *buf, int bufle
 
   rc = pcre2_match(regex_compiled, (PCRE2_SPTR8)bufc, buflen, 0, 0, match_data, match_context);
   if (rc < 0) {
-    if (rc == PCRE2_ERROR_MATCHLIMIT) {
-      if (o.debugging || o.verbose > 1)
-        error("Warning: Hit PCRE_ERROR_MATCHLIMIT when probing for service %s with the regex '%s'", servicename, matchstr);
-    } else
-    if (rc == PCRE2_ERROR_RECURSIONLIMIT) {
-      if (o.debugging || o.verbose > 1)
-        error("Warning: Hit PCRE_ERROR_RECURSIONLIMIT when probing for service %s with the regex '%s'", servicename, matchstr);
-    } else
-      if (rc != PCRE2_ERROR_NOMATCH) {
-        fatal("Unexpected PCRE error (%d) when probing for service %s with the regex '%s'", rc, servicename, matchstr);
+    // Probably just didn't match. However, PCRE2 errors may happen with bad
+    // patterns. We want to know, but don't abandon the whole scan.
+    if (rc != PCRE2_ERROR_NOMATCH) {
+      if (o.verbose || o.debugging) {
+        error("Warning: PCRE2 error %d when probing for service %s with the regex '%s'", rc, servicename, matchstr);
       }
+      if (o.debugging) {
+        pcre2_get_error_message(rc, (unsigned char *)info, SERVICE_EXTRA_LEN);
+        error("PCRE2 error message: %s", info);
+        if (o.debugging > 1) {
+          error("Service data: \n%s", hexdump(buf, buflen));
+        }
+      }
+    }
   } else {
     // Yeah!  Match apparently succeeded.
     // Now lets get the version number if available
@@ -2584,6 +2590,7 @@ static void servicescan_read_handler(nsock_pool nsp, nsock_event nse, void *myda
   } else if (status == NSE_STATUS_ERROR) {
     // Errors might happen in some cases ... I'll worry about later
     int err = nse_errorcode(nse);
+    bool show_err = true;
     switch(err) {
     case ECONNRESET:
     case ECONNREFUSED: // weird to get this on a connected socket (shrug) but
@@ -2598,22 +2605,6 @@ static void servicescan_read_handler(nsock_pool nsp, nsock_event nse, void *myda
         // next one
         startNextProbe(nsp, nsi, SG, svc, true);
       }
-      break;
-#ifdef EHOSTDOWN
-    case EHOSTDOWN: // ICMP_HOST_UNKNOWN
-#endif
-#ifdef ENONET
-    case ENONET: // ICMP_HOST_ISOLATED
-#endif
-    /* EHOSTDOWN and ENONET can be the result of forged ICMP responses.
-     * We should probably give up on this port.
-     */
-    case ENETUNREACH:
-    case EHOSTUNREACH:
-      // That is funny.  The port scanner listed the port as open.  Maybe it got unplugged, or firewalled us, or did
-      // something else nasty during the scan.  Shrug.  I'll give up on this port
-      svc->tcpwrap_possible = false;
-      end_svcprobe(PROBESTATE_INCOMPLETE, SG, svc, nsi);
       break;
 #ifdef ENOPROTOOPT
     case ENOPROTOOPT: // ICMP_PROT_UNREACH
@@ -2645,9 +2636,29 @@ static void servicescan_read_handler(nsock_pool nsp, nsock_event nse, void *myda
       // hardcoded to EIO).  I'll just try the next probe.
       startNextProbe(nsp, nsi, SG, svc, true);
       break;
+#ifdef EHOSTDOWN
+    case EHOSTDOWN: // ICMP_HOST_UNKNOWN
+#endif
+#ifdef ENONET
+    case ENONET: // ICMP_HOST_ISOLATED
+#endif
+    /* EHOSTDOWN and ENONET can be the result of forged ICMP responses.
+     * We should probably give up on this port.
+     */
+    case ENETUNREACH:
+    case EHOSTUNREACH:
+    case ENETDOWN:
+      // That is funny.  The port scanner listed the port as open.  Maybe it got unplugged, or firewalled us, or did
+      // something else nasty during the scan.  Shrug.  I'll give up on this port
+      show_err = o.debugging || o.versionTrace();
     default:
-      fatal("Unexpected error in NSE_TYPE_READ callback.  Error code: %d (%s)", err,
-            socket_strerror(err));
+      if (show_err) {
+        error("Unexpected error %d (%s) in NSE_TYPE_READ callback - aborting this service",
+            err, socket_strerror(err));
+      }
+      svc->tcpwrap_possible = false;
+      end_svcprobe(PROBESTATE_INCOMPLETE, SG, svc, nsi);
+      break;
     }
   } else if (status == NSE_STATUS_KILL) {
     /* User probably specified host_timeout and so the service scan is

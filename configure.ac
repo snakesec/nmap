@@ -233,16 +233,26 @@ CHECK_IPV6_IPPROTO_RAW
 m4_define_default([_AM_PYTHON_INTERPRETER_LIST],[python3 python])
 AM_PATH_PYTHON([3], [HAVE_PYTHON=true], [HAVE_PYTHON=false])
 
+if $HAVE_PYTHON ; then
+  AC_MSG_CHECKING([for python setuptools])
+  if $PYTHON -c 'import setuptools' 2>/dev/null ; then
+    have_setuptools=yes
+  else
+    have_setuptools=no
+  fi
+  AC_MSG_RESULT([$have_setuptools])
+fi
+
 NDIFFDIR=ndiff
 
 # Do they want Ndiff?
 AC_ARG_WITH(ndiff, AC_HELP_STRING([--without-ndiff], [Skip installation of the Ndiff utility]), [], [with_ndiff=check])
-if $HAVE_PYTHON ; then : ;
+if $HAVE_PYTHON && test "$have_setuptools" = "yes" ; then : ;
 else
   if test "$with_ndiff" = "check" ; then
-    AC_MSG_WARN([Not building Ndiff because Python was not found])
+    AC_MSG_WARN([Not building Ndiff because Python with setuptools was not found])
   elif test "$with_ndiff" = "yes"; then
-    AC_MSG_FAILURE([--with-ndiff requires Python])
+    AC_MSG_FAILURE([--with-ndiff requires Python with setuptools])
   fi
   with_ndiff=no
 fi
@@ -529,12 +539,17 @@ AC_HELP_STRING([--with-libpcre=included], [Always use the version included with 
 # If they didn't specify it, we try to find it
 if test $have_pcre != yes -a $requested_included_pcre != yes ; then
   AC_CHECK_HEADER(pcre2.h,
-    AC_CHECK_LIB(pcre2-8, pcre2_compile_8, [have_pcre=yes ]),
-    [],
-    [
-#define PCRE2_CODE_UNIT_WIDTH 8
-     ]
-  )
+    AC_CHECK_LIB(pcre2-8,
+      pcre2_compile_8,
+      [have_pcre=yes ]),
+    AC_CHECK_HEADER(pcre2/pcre2.h,
+      AC_CHECK_LIB(pcre2-8,
+        pcre2_compile_8,
+        [have_pcre=yes
+        AC_DEFINE(HAVE_PCRE2_PCRE2_H, 1, [Using system pcre2/pcre2.h])]),
+      [],
+      [#define PCRE2_CODE_UNIT_WIDTH 8]),
+    [#define PCRE2_CODE_UNIT_WIDTH 8])
 fi
 
 # If we still don't have it, we use our own
@@ -547,8 +562,6 @@ if test $have_pcre != yes ; then
   PCRE_DIST_CLEAN="distclean-pcre"
   AC_DEFINE(PCRE_INCLUDED, 1, [Using included libpcre2])
 else
-# We only need to check for and use this if we are NOT using included pcre
-  AC_CHECK_HEADERS(pcre2.h)
   LIBPCRE_LIBS="-lpcre2-8"
   PCRE_BUILD=""
   PCRE_CLEAN=""

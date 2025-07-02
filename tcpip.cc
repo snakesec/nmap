@@ -6,7 +6,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -60,7 +60,7 @@
  *
  ***************************************************************************/
 
-/* $Id: tcpip.cc 38790 2024-02-28 18:46:45Z dmiller $ */
+/* $Id: tcpip.cc 39118 2025-04-11 21:45:17Z dmiller $ */
 
 #include "nmap.h"
 
@@ -1554,8 +1554,7 @@ const u8 *readip_pcap(pcap_t *pd, unsigned int *len, long to_usec,
   if (offset && linknfo) {
     linknfo->datalinktype = datalink;
     linknfo->headerlen = offset;
-    assert(offset <= MAX_LINK_HEADERSZ);
-    memcpy(linknfo->header, p - offset, MIN(sizeof(linknfo->header), offset));
+    linknfo->header = p;
   }
   if (rcvdtime)
     PacketTrace::trace(PacketTrace::RCVD, (u8 *) p, *len,
@@ -1610,7 +1609,7 @@ int setTargetMACIfAvailable(Target *target, struct link_header *linkhdr,
   if (!linkhdr || !target || !src)
     return 1;
 
-  if (linkhdr->datalinktype != DLT_EN10MB || linkhdr->headerlen != 14)
+  if (linkhdr->datalinktype != DLT_EN10MB || linkhdr->headerlen < 14)
     return 2;
 
   if (!overwrite && target->MACAddress())

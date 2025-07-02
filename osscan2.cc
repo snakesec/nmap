@@ -6,7 +6,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -60,7 +60,7 @@
  *
  ***************************************************************************/
 
-/* $Id: osscan2.cc 38790 2024-02-28 18:46:45Z dmiller $ */
+/* $Id: osscan2.cc 39125 2025-04-16 00:00:05Z dmiller $ */
 
 #include "osscan.h"
 #include "osscan2.h"
@@ -80,10 +80,6 @@
 #include <math.h>
 
 extern NmapOps o;
-#ifdef WIN32
-/* from libdnet's intf-win32.c */
-extern "C" int g_has_npcap_loopback;
-#endif
 
 /* 8 options:
  *  0~5: six options for SEQ/OPS/WIN/T1 probes.
@@ -296,7 +292,7 @@ int get_diffs(u32 *ipid_diffs, int numSamples, const u32 *ipids, int islocalhost
 
 }
 
-/* Indentify the ipid sequence for 32-bit IPID values (IPv6) */
+/* Identify the ipid sequence for 32-bit IPID values (IPv6) */
 int get_ipid_sequence_32(int numSamples, const u32 *ipids, int islocalhost) {
   int ipid_seq = IPID_SEQ_UNKNOWN;
   u32 ipid_diffs[32];
@@ -310,7 +306,7 @@ int get_ipid_sequence_32(int numSamples, const u32 *ipids, int islocalhost) {
   }
 }
 
-/* Indentify the ipid sequence for 16-bit IPID values (IPv4) */
+/* Identify the ipid sequence for 16-bit IPID values (IPv4) */
 int get_ipid_sequence_16(int numSamples, const u32 *ipids, int islocalhost) {
   int i;
   int ipid_seq = IPID_SEQ_UNKNOWN;
@@ -1276,8 +1272,9 @@ bool HostOsScan::nextTimeout(HostOsScanStats *hss, struct timeval *when) const {
   memset(&probe_to, 0, sizeof(probe_to));
   memset(&earliest_to, 0, sizeof(earliest_to));
 
+  unsigned long usec_to = timeProbeTimeout(hss);
   for (probeI = hss->probesActive.begin(); probeI != hss->probesActive.end(); probeI++) {
-    TIMEVAL_ADD(probe_to, (*probeI)->sent, timeProbeTimeout(hss));
+    TIMEVAL_ADD(probe_to, (*probeI)->sent, usec_to);
     if (firstgood || TIMEVAL_BEFORE(probe_to, earliest_to)) {
       earliest_to = probe_to;
       firstgood = false;
@@ -1341,7 +1338,7 @@ HostOsScan::HostOsScan(Target *t) {
 
   if ((o.sendpref & PACKET_SEND_ETH) && (t->ifType() == devt_ethernet
 #ifdef WIN32
-    || (g_has_npcap_loopback && t->ifType() == devt_loopback)
+    || (o.have_pcap && t->ifType() == devt_loopback)
 #endif
     )) {
     if ((ethsd = eth_open_cached(t->deviceName())) == NULL)
@@ -1435,6 +1432,7 @@ void HostOsScan::updateActiveSeqProbes(HostOsScanStats *hss) {
   assert(hss);
   std::list<OFProbe *>::iterator probeI, nxt;
   OFProbe *probe = NULL;
+  long usec_to = timeProbeTimeout(hss);
 
   for (probeI = hss->probesActive.begin(); probeI != hss->probesActive.end(); probeI = nxt) {
     nxt = probeI;
@@ -1442,7 +1440,7 @@ void HostOsScan::updateActiveSeqProbes(HostOsScanStats *hss) {
     probe = *probeI;
 
     /* Is the probe timedout? */
-    if (TIMEVAL_SUBTRACT(now, probe->sent) > (long) timeProbeTimeout(hss)) {
+    if (TIMEVAL_SUBTRACT(now, probe->sent) > usec_to) {
       hss->removeActiveProbe(probeI);
       assert(stats->num_probes_active > 0);
       stats->num_probes_active--;
@@ -1517,13 +1515,14 @@ void HostOsScan::updateActiveTUIProbes(HostOsScanStats *hss) {
   assert(hss);
   std::list<OFProbe *>::iterator probeI, nxt;
   OFProbe *probe = NULL;
+  long usec_to = timeProbeTimeout(hss);
 
   for (probeI = hss->probesActive.begin(); probeI != hss->probesActive.end(); probeI = nxt) {
     nxt = probeI;
     nxt++;
     probe = *probeI;
 
-    if (TIMEVAL_SUBTRACT(now, probe->sent) > (long) timeProbeTimeout(hss)) {
+    if (TIMEVAL_SUBTRACT(now, probe->sent) > usec_to) {
       if (probe->tryno >= 3) {
         /* The probe is expired. */
         hss->removeActiveProbe(probeI);
@@ -1579,8 +1578,9 @@ bool HostOsScan::hostSendOK(HostOsScanStats *hss, struct timeval *when) const {
   TIMEVAL_MSEC_ADD(earliest_to, now, 10000);
 
   /* Any timeouts coming up? */
+  unsigned long msec_to = timeProbeTimeout(hss) / 1000;
   for (probeI = hss->probesActive.begin(); probeI != hss->probesActive.end(); probeI++) {
-    TIMEVAL_MSEC_ADD(probe_to, (*probeI)->sent, timeProbeTimeout(hss) / 1000);
+    TIMEVAL_MSEC_ADD(probe_to, (*probeI)->sent, msec_to);
     if (TIMEVAL_BEFORE(probe_to, earliest_to)) {
       earliest_to = probe_to;
     }
@@ -1652,8 +1652,9 @@ bool HostOsScan::hostSeqSendOK(HostOsScanStats *hss, struct timeval *when) const
   TIMEVAL_MSEC_ADD(earliest_to, now, 10000);
 
   /* Any timeouts coming up? */
+  unsigned long msec_to = timeProbeTimeout(hss) / 1000;
   for (probeI = hss->probesActive.begin(); probeI != hss->probesActive.end(); probeI++) {
-    TIMEVAL_MSEC_ADD(probe_to, (*probeI)->sent, timeProbeTimeout(hss) / 1000);
+    TIMEVAL_MSEC_ADD(probe_to, (*probeI)->sent, msec_to);
     if (TIMEVAL_BEFORE(probe_to, earliest_to)) {
       earliest_to = probe_to;
     }
@@ -3277,13 +3278,6 @@ OsScanInfo::OsScanInfo(std::vector<Target *> &Targets) {
       num_timedout++;
       continue;
     }
-
-#ifdef WIN32
-    if (g_has_npcap_loopback == 0 && Targets[targetno]->ifType() == devt_loopback) {
-      log_write(LOG_STDOUT, "Skipping OS Scan against %s because it doesn't work against your own machine (localhost)\n", Targets[targetno]->NameIP());
-      continue;
-    }
-#endif
 
     if (Targets[targetno]->ports.getStateCounts(IPPROTO_TCP, PORT_OPEN) == 0 ||
         (Targets[targetno]->ports.getStateCounts(IPPROTO_TCP, PORT_CLOSED) == 0 &&

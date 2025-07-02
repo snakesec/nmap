@@ -9,7 +9,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2024 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -63,7 +63,7 @@
  *
  ***************************************************************************/
 
-/* $Id: output.cc 38802 2024-03-11 15:49:29Z dmiller $ */
+/* $Id: output.cc 39083 2025-02-26 17:44:43Z dmiller $ */
 
 #include "nmap.h"
 #include "output.h"
@@ -1318,6 +1318,15 @@ void write_xml_hosthint(const Target *currenths) {
   xml_end_tag();
   xml_newline();
   log_flush_all();
+}
+
+void log_bogus_target(const char *expr) {
+  xml_open_start_tag("target");
+  xml_attribute("specification", "%s", expr);
+  xml_attribute("status", "skipped");
+  xml_attribute("reason", "invalid");
+  xml_close_empty_tag();
+  xml_newline();
 }
 
 static void write_xml_osclass(const OS_Classification *osclass, double accuracy) {
